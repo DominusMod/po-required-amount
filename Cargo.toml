@@ -1,0 +1,3 @@
+[workspace]
+members = ["contracts/verifier"]
+resolver = "2"

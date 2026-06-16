@@ -1,0 +1,26 @@
+# Node
+node_modules/
+.next/
+.env.local
+*.log
+
+# Rust
+target/
+Cargo.lock
+
+# Circuit compiled output (re-generate with nargo compile)
+circuits/target/
+
+# Noir proof artifacts
+*.proof
+*.vk
+*.witness
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
