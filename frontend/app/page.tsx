@@ -72,8 +72,19 @@ export default function HomePage() {
 
     if (DEMO_MODE) {
       const passes = balanceResult.balanceCents >= thresholdCents;
-      const fakeProof = { proof: new Uint8Array(32), publicInputs: ["0x" + "00".repeat(32)], proofHex: "a1b2c3d4e5f6" + "0".repeat(200) };
-      setPipeline((p) => ({ ...p, witness: "working" })); await wait(1000);
+      const fakeProof = {
+  proof: new Uint8Array(32),
+  publicInputs: ["0x" + "00".repeat(32)],
+  proofHex: "a1b2c3d4e5f6" + "0".repeat(200),
+  snarkProof: {
+    pi_a: ["1", "2", "1"],
+    pi_b: [["1", "2"], ["3", "4"], ["1", "0"]],
+    pi_c: ["5", "6", "1"],
+    protocol: "groth16",
+    curve: "bn128",
+  },
+  snarkPublic: ["1"],
+};      setPipeline((p) => ({ ...p, witness: "working" })); await wait(1000);
       setPipeline((p) => ({ ...p, witness: "done", proof: "working" })); await wait(1500);
       setPipeline((p) => ({ ...p, proof: "done", zkProof: fakeProof, verify: "working" })); await wait(800);
       setPipeline((p) => ({ ...p, verify: "done", localVerified: true, onChain: "working" })); await wait(1200);
