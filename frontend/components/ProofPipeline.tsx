@@ -4,17 +4,16 @@ import type { ZKProof } from "../lib_zk/prover";
 type StepStatus = "idle" | "working" | "done" | "error";
 
 export interface PipelineState {
-  witness: StepStatus; proof: StepStatus; verify: StepStatus; onChain: StepStatus;
-  zkProof: ZKProof | null; txHash: string | null; error: string | null;
-  localVerified: boolean | null; onChainVerified: boolean | null;
+  witness: StepStatus; proof: StepStatus; verify: StepStatus;
+  zkProof: ZKProof | null; error: string | null;
+  localVerified: boolean | null;
 }
 
 export default function ProofPipeline({ state, thresholdUSD }: { state: PipelineState; thresholdUSD: number }) {
   const steps = [
-    { key: "witness" as const, num: 1, title: "Execute circuit", desc: "Noir circuit runs in your browser and generates the witness", detail: state.witness === "done" ? "Witness generated" : state.error ?? "" },
-    { key: "proof"   as const, num: 2, title: "Generate proof", desc: "Barretenberg produces the UltraHonk cryptographic proof", detail: state.zkProof ? `${state.zkProof.proofHex.slice(0, 40)}…` : state.error ?? "" },
-    { key: "verify"  as const, num: 3, title: "Local verification", desc: "Proof is verified locally before submission", detail: state.localVerified === true ? "Passed" : state.localVerified === false ? "Failed" : "" },
-    { key: "onChain" as const, num: 4, title: "On-chain verification", desc: `Soroban contract verifies the proof for $${thresholdUSD.toFixed(2)} USDC threshold`, detail: state.txHash ? `tx: ${state.txHash.slice(0, 24)}…` : state.error ?? "" },
+    { key: "witness" as const, num: 1, title: "Execute circuit", desc: "Circom circuit runs in your browser and computes the witness", detail: state.witness === "done" ? "Witness generated" : state.error ?? "" },
+    { key: "proof"   as const, num: 2, title: "Generate proof", desc: "snarkjs produces the Groth16 cryptographic proof", detail: state.zkProof ? `${state.zkProof.proofHex.slice(0, 40)}…` : state.error ?? "" },
+    { key: "verify"  as const, num: 3, title: "Verify proof", desc: `Proof is verified locally against the $${thresholdUSD.toFixed(2)} USDC threshold`, detail: state.localVerified === true ? "Passed" : state.localVerified === false ? "Failed" : "" },
   ];
 
   return (
@@ -24,7 +23,7 @@ export default function ProofPipeline({ state, thresholdUSD }: { state: Pipeline
         <div className="step-title">Generating your proof</div>
       </div>
       <p style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 20 }}>
-        Everything runs in your browser. Only the proof and the threshold touch the network.
+        Everything runs in your browser. Your balance never leaves it.
       </p>
       <div className="pipeline">
         {steps.map((step) => {
