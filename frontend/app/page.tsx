@@ -9,19 +9,14 @@ import ProofPipeline, { PipelineState } from "../components/ProofPipeline";
 import ResultPanel from "../components/ResultPanel";
 import { fetchStellarUSDCBalance, BalanceResult } from "../lib_stellar/horizon";
 import { generateBalanceProof, verifyBalanceProofLocal } from "../lib_zk/prover";
-import { verifyProofOnChain } from "../lib_soroban/verifier";
-
-const DEMO_MODE = true;
 
 type AppPhase = "input" | "balance-fetched" | "proving" | "done";
 
 const INITIAL_PIPELINE: PipelineState = {
-  witness: "idle", proof: "idle", verify: "idle", onChain: "idle",
-  zkProof: null, txHash: null, error: null,
-  localVerified: null, onChainVerified: null,
+  witness: "idle", proof: "idle", verify: "idle",
+  zkProof: null, error: null,
+  localVerified: null,
 };
-
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function useCounter(target: number, duration = 1400) {
   const [value, setValue] = useState(0);
@@ -50,12 +45,7 @@ export default function HomePage() {
     setFetching(true);
     setPublicKey(key);
     try {
-      if (DEMO_MODE) {
-        await wait(1200);
-        setBalance({ balance: "2500.0000000", balanceCents: 250000n, balanceUnits: 2500, assetCode: "USDC", issuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5" });
-      } else {
-        setBalance(await fetchStellarUSDCBalance(key));
-      }
+      setBalance(await fetchStellarUSDCBalance(key));
       setPhase("balance-fetched");
     } catch (err: unknown) {
       alert(`Balance fetch failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -70,29 +60,6 @@ export default function HomePage() {
     setPhase("proving");
     setPipeline(INITIAL_PIPELINE);
 
-    if (DEMO_MODE) {
-      const passes = balanceResult.balanceCents >= thresholdCents;
-      const fakeProof = {
-  proof: new Uint8Array(32),
-  publicInputs: ["0x" + "00".repeat(32)],
-  proofHex: "a1b2c3d4e5f6" + "0".repeat(200),
-  snarkProof: {
-    pi_a: ["1", "2", "1"],
-    pi_b: [["1", "2"], ["3", "4"], ["1", "0"]],
-    pi_c: ["5", "6", "1"],
-    protocol: "groth16",
-    curve: "bn128",
-  },
-  snarkPublic: ["1"],
-};      setPipeline((p) => ({ ...p, witness: "working" })); await wait(1000);
-      setPipeline((p) => ({ ...p, witness: "done", proof: "working" })); await wait(1500);
-      setPipeline((p) => ({ ...p, proof: "done", zkProof: fakeProof, verify: "working" })); await wait(800);
-      setPipeline((p) => ({ ...p, verify: "done", localVerified: true, onChain: "working" })); await wait(1200);
-      setPipeline((p) => ({ ...p, onChain: passes ? "done" : "error", onChainVerified: passes, txHash: passes ? "DEMO_TX_" + Date.now() : null, error: passes ? null : "Balance below threshold" }));
-      setPhase("done");
-      return;
-    }
-
     setPipeline((p) => ({ ...p, witness: "working" }));
     let zkProof;
     try {
@@ -104,34 +71,20 @@ export default function HomePage() {
     }
 
     setPipeline((p) => ({ ...p, proof: "done", zkProof, verify: "working" }));
-    let localOk = false;
     try {
-      localOk = await verifyBalanceProofLocal(zkProof);
-      setPipeline((p) => ({ ...p, verify: localOk ? "done" : "error", localVerified: localOk, onChain: localOk ? "working" : "error", error: localOk ? null : "Local verification failed" }));
-      if (!localOk) { setPhase("balance-fetched"); return; }
+      const localOk = await verifyBalanceProofLocal(zkProof);
+      setPipeline((p) => ({
+        ...p,
+        verify: localOk ? "done" : "error",
+        localVerified: localOk,
+        error: localOk ? null : "Proof verification failed — balance does not meet threshold",
+      }));
+      setPhase("done");
     } catch (err: unknown) {
       setPipeline((p) => ({ ...p, verify: "error", localVerified: false, error: err instanceof Error ? err.message : String(err) }));
-      setPhase("balance-fetched"); return;
-    }
-
-    const contractId = process.env.NEXT_PUBLIC_VERIFIER_CONTRACT_ID;
-    if (!contractId || contractId === "PLACEHOLDER_DEPLOY_CONTRACT_FIRST") {
-      setPipeline((p) => ({ ...p, onChain: "done", onChainVerified: true, txHash: "local-only" }));
-      setPhase("done"); return;
-    }
-
-    try {
-      const signTransaction = async (_xdr: string): Promise<string> => {
-        throw new Error("Freighter not yet connected");
-      };
-      const result = await verifyProofOnChain(zkProof.proofHex, zkProof.publicInputs, thresholdCents, publicKey, signTransaction);
-      setPipeline((p) => ({ ...p, onChain: result.verified ? "done" : "error", onChainVerified: result.verified, txHash: result.txHash }));
-      setPhase("done");
-    } catch (err: unknown) {
-      setPipeline((p) => ({ ...p, onChain: "error", error: err instanceof Error ? err.message : String(err) }));
       setPhase("done");
     }
-  }, [balanceResult, publicKey]);
+  }, [balanceResult]);
 
   const handleReset = useCallback(() => {
     setPhase("input"); setBalance(null); setPublicKey(""); setPipeline(INITIAL_PIPELINE); setThresholdUSD(0);
@@ -160,7 +113,7 @@ export default function HomePage() {
                 <div className="hero-stat-label">Cryptographically private</div>
               </div>
               <div className="hero-stat">
-                <div className="hero-stat-val blue"><AnimCount target={4} /> steps</div>
+                <div className="hero-stat-val blue"><AnimCount target={3} /> steps</div>
                 <div className="hero-stat-label">From wallet to proof</div>
               </div>
               <div className="hero-stat">
@@ -193,9 +146,8 @@ export default function HomePage() {
           {/* Result */}
           {phase === "done" && (
             <ResultPanel
-              verified={pipeline.onChainVerified === true || pipeline.localVerified === true}
+              verified={pipeline.localVerified === true}
               thresholdUSD={thresholdUSD}
-              txHash={pipeline.txHash}
               onReset={handleReset}
             />
           )}
