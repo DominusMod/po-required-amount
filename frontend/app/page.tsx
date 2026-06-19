@@ -10,19 +10,19 @@ import ProofPipeline, { PipelineState } from "../components/ProofPipeline";
 import ResultPanel from "../components/ResultPanel";
 import { fetchStellarUSDCBalance, BalanceResult } from "../lib_stellar/horizon";
 import { generateBalanceProof, verifyBalanceProofLocal } from "../lib_zk/prover";
+import { verifyProofOnChain } from "../lib_soroban/verifier";
 
 // Phases:
 //  input           → user enters wallet address
 //  balance-fetched → balance shown, threshold input visible
-//  ownership       → OwnershipProof component visible; threshold staged but proof not yet running
-//  proving         → proof pipeline running (triggered by useEffect after ownership confirmed)
-//  done            → proof complete
+//  ownership       → Freighter signs to prove wallet ownership
+//  proving         → proof pipeline running (auto-triggered after ownership)
+//  done            → proof + anchor complete
 type AppPhase = "input" | "balance-fetched" | "ownership" | "proving" | "done";
 
 const INITIAL_PIPELINE: PipelineState = {
-  witness: "idle", proof: "idle", verify: "idle",
-  zkProof: null, error: null,
-  localVerified: null,
+  witness: "idle", proof: "idle", verify: "idle", anchor: "idle",
+  zkProof: null, error: null, localVerified: null, txHash: null,
 };
 
 function useCounter(target: number, duration = 1400) {
@@ -48,14 +48,12 @@ export default function HomePage() {
   const [thresholdUSD, setThresholdUSD] = useState(0);
   const [pipeline, setPipeline]         = useState<PipelineState>(INITIAL_PIPELINE);
 
-  // Staged threshold values — set by ThresholdInput, consumed by proof run
   const [stagedThresholdCents, setStagedThresholdCents] = useState<bigint>(0n);
   const [stagedThresholdUSD,   setStagedThresholdUSD]   = useState(0);
-
-  // signFn provided by OwnershipProof after Freighter sign — passed to verifyProofOnChain
   const [signFn, setSignFn] = useState<((xdr: string) => Promise<string>) | null>(null);
+  const [signerAddress, setSignerAddress] = useState("");
 
-  // ─── Step 1: fetch balance ────────────────────────────────────────────────
+  // ── Step 1: fetch balance ──────────────────────────────────────────────────
   const handleFetchBalance = useCallback(async (key: string) => {
     setFetching(true);
     setPublicKey(key);
@@ -69,8 +67,7 @@ export default function HomePage() {
     }
   }, []);
 
-  // ─── Step 2: threshold staged — reveal ownership step ────────────────────
-  // ThresholdInput now calls this instead of launching the proof directly.
+  // ── Step 2: stage threshold → show ownership step ──────────────────────────
   const handleStageThreshold = useCallback((thresholdCents: bigint, thresholdUSDVal: number) => {
     setStagedThresholdCents(thresholdCents);
     setStagedThresholdUSD(thresholdUSDVal);
@@ -78,15 +75,10 @@ export default function HomePage() {
     setPhase("ownership");
   }, []);
 
-  // ─── Step 3: ownership confirmed — store signFn and move to proving ───────
+  // ── Step 3: ownership confirmed → move to proving ──────────────────────────
   const handleOwnershipSigned = useCallback(
-    (
-      _signerAddress: string,
-      freighterSignFn: (xdr: string) => Promise<string>
-    ) => {
-      // Store the sign function in state.
-      // NOTE: useState setter with a function value requires wrapping in an arrow
-      // to prevent React from calling it as an updater function.
+    (addr: string, freighterSignFn: (xdr: string) => Promise<string>) => {
+      setSignerAddress(addr);
       setSignFn(() => freighterSignFn);
       setPhase("proving");
     },
@@ -94,26 +86,26 @@ export default function HomePage() {
   );
 
   const handleOwnershipError = useCallback((msg: string) => {
-    // Stay on ownership phase so user can retry; error is shown inside OwnershipProof
-    console.error("Ownership proof error:", msg);
+    console.error("Ownership error:", msg);
   }, []);
 
-  // ─── Step 4: run proof pipeline once phase = proving ─────────────────────
+  // ── Step 4: proof pipeline auto-runs when phase = proving ─────────────────
   useEffect(() => {
     if (phase !== "proving" || !balanceResult || !signFn) return;
 
     let cancelled = false;
 
     async function runProof() {
-      if (!balanceResult) return;
+      if (!balanceResult || !signFn) return;
 
       setPipeline(INITIAL_PIPELINE);
       setPipeline((p) => ({ ...p, witness: "working" }));
 
+      // 4a. Generate ZK proof
       let zkProof;
       try {
         zkProof = await generateBalanceProof({
-          balance: balanceResult.balanceCents,
+          balance:   balanceResult.balanceCents,
           threshold: stagedThresholdCents,
         });
         if (cancelled) return;
@@ -131,16 +123,17 @@ export default function HomePage() {
 
       setPipeline((p) => ({ ...p, proof: "done", zkProof, verify: "working" }));
 
+      // 4b. Verify locally
+      let localOk = false;
       try {
-        const localOk = await verifyBalanceProofLocal(zkProof);
+        localOk = await verifyBalanceProofLocal(zkProof);
         if (cancelled) return;
         setPipeline((p) => ({
           ...p,
           verify: localOk ? "done" : "error",
           localVerified: localOk,
-          error: localOk ? null : "Proof verification failed — balance does not meet threshold",
+          error: localOk ? null : "Balance does not meet threshold",
         }));
-        setPhase("done");
       } catch (err: unknown) {
         if (cancelled) return;
         setPipeline((p) => ({
@@ -150,7 +143,42 @@ export default function HomePage() {
           error: err instanceof Error ? err.message : String(err),
         }));
         setPhase("done");
+        return;
       }
+
+      // 4c. Anchor on-chain (only if local verify passed)
+      if (localOk) {
+        setPipeline((p) => ({ ...p, anchor: "working" }));
+        try {
+          const result = await verifyProofOnChain(
+            zkProof.proofHex,
+            zkProof.snarkPublic,
+            stagedThresholdCents,
+            signerAddress,
+            signFn
+          );
+          if (cancelled) return;
+          setPipeline((p) => ({
+            ...p,
+            anchor: result.verified ? "done" : "error",
+            txHash: result.txHash,
+            error:  result.verified ? null : "On-chain anchor failed",
+          }));
+        } catch (err: unknown) {
+          if (cancelled) return;
+          // Anchor failure doesn't invalidate the local proof — show as warning
+          setPipeline((p) => ({
+            ...p,
+            anchor: "error",
+            error: err instanceof Error ? err.message : String(err),
+          }));
+        }
+      } else {
+        // Skip anchor if proof failed
+        setPipeline((p) => ({ ...p, anchor: "idle" }));
+      }
+
+      setPhase("done");
     }
 
     runProof();
@@ -158,7 +186,7 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, signFn]);
 
-  // ─── Reset ────────────────────────────────────────────────────────────────
+  // ── Reset ──────────────────────────────────────────────────────────────────
   const handleReset = useCallback(() => {
     setPhase("input");
     setBalance(null);
@@ -168,6 +196,7 @@ export default function HomePage() {
     setStagedThresholdCents(0n);
     setStagedThresholdUSD(0);
     setSignFn(null);
+    setSignerAddress("");
   }, []);
 
   return (
@@ -193,7 +222,7 @@ export default function HomePage() {
                 <div className="hero-stat-label">Cryptographically private</div>
               </div>
               <div className="hero-stat">
-                <div className="hero-stat-val blue"><AnimCount target={3} /> steps</div>
+                <div className="hero-stat-val blue"><AnimCount target={4} /> steps</div>
                 <div className="hero-stat-label">From wallet to proof</div>
               </div>
               <div className="hero-stat">
@@ -203,17 +232,17 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Step 1 — wallet input (hide once we're past ownership) */}
+          {/* Step 1 — wallet input */}
           {(phase === "input" || phase === "balance-fetched") && (
             <WalletInput onFetchBalance={handleFetchBalance} loading={fetchingBalance} />
           )}
 
-          {/* Balance panel — visible from balance-fetched onwards */}
+          {/* Balance panel */}
           {balanceResult && phase !== "input" && (
             <BalancePanel result={balanceResult} publicKey={publicKey} />
           )}
 
-          {/* Step 2 — threshold (only while balance fetched and not yet in ownership) */}
+          {/* Step 2 — threshold */}
           {phase === "balance-fetched" && balanceResult && (
             <ThresholdInput
               balanceUnits={balanceResult.balanceUnits}
@@ -233,7 +262,7 @@ export default function HomePage() {
             />
           )}
 
-          {/* Step 4 — proof pipeline */}
+          {/* Step 4 — proof pipeline + anchor */}
           {(phase === "proving" || phase === "done") && (
             <ProofPipeline state={pipeline} thresholdUSD={thresholdUSD} />
           )}
@@ -243,6 +272,7 @@ export default function HomePage() {
             <ResultPanel
               verified={pipeline.localVerified === true}
               thresholdUSD={thresholdUSD}
+              txHash={pipeline.txHash}
               onReset={handleReset}
             />
           )}
