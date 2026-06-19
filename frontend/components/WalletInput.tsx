@@ -1,5 +1,4 @@
 "use client";
-
 import { useState } from "react";
 import { isValidStellarPublicKey } from "../lib_stellar/horizon";
 
@@ -11,7 +10,6 @@ interface WalletInputProps {
 export default function WalletInput({ onFetchBalance, loading }: WalletInputProps) {
   const [key, setKey] = useState("");
   const [touched, setTouched] = useState(false);
-
   const isValid = isValidStellarPublicKey(key);
   const showError = touched && key.length > 0 && !isValid;
 
@@ -23,19 +21,16 @@ export default function WalletInput({ onFetchBalance, loading }: WalletInputProp
 
   return (
     <div className="card stack-md">
-      <div>
-        <div className="section-label">Step 1 — Wallet</div>
-        <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 14 }}>
-          Enter a Stellar public key. The balance is fetched from Horizon
-          but never sent off-device after that.
-        </p>
+      <div className="step-indicator">
+        <div className="step-num">1</div>
+        <div className="step-title">Enter your wallet address</div>
       </div>
-
-      <form onSubmit={handleSubmit} className="stack-sm">
+      <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: -8 }}>
+        Your USDC balance is fetched directly from Stellar and stays in your browser. Nothing is sent to any server.
+      </p>
+      <form onSubmit={handleSubmit} className="stack-md">
         <div className="field">
-          <label className="field-label" htmlFor="pubkey">
-            Stellar Public Key
-          </label>
+          <label className="field-label" htmlFor="pubkey">Stellar Public Key</label>
           <input
             id="pubkey"
             className={`input ${showError ? "error" : ""}`}
@@ -46,64 +41,30 @@ export default function WalletInput({ onFetchBalance, loading }: WalletInputProp
             onBlur={() => setTouched(true)}
             spellCheck={false}
             autoComplete="off"
-            autoCorrect="off"
           />
-          {showError && (
-            <span className="field-hint error">
-              Invalid Stellar public key (must start with G, 56 chars)
-            </span>
-          )}
-          {!showError && (
-            <span className="field-hint">
-              Only USDC balance is read. Your key stays client-side.
-            </span>
-          )}
+          {showError
+            ? <span className="field-hint error">Must start with G and be 56 characters</span>
+            : <span className="field-hint">Starts with G · 56 characters · only your USDC balance is read</span>
+          }
         </div>
-
-        <button
-          type="submit"
-          className="btn btn-primary btn-full"
-          disabled={loading || !key}
-        >
-          {loading ? (
-            <>
-              <SpinIcon />
-              Fetching balance…
-            </>
-          ) : (
-            "Fetch USDC Balance"
-          )}
+        <button type="submit" className="btn btn-primary btn-full" disabled={loading || !key}>
+          {loading ? <><Spinner /> Fetching balance…</> : "Fetch USDC Balance"}
         </button>
       </form>
-
       <div className="callout">
-        <span>⚠</span>
-        <span>
-          Testnet only. Fund your account with Friendbot if balance shows zero.{" "}
-          <a
-            href="https://friendbot.stellar.org"
-            target="_blank"
-            rel="noreferrer"
-            style={{ color: "inherit", textDecoration: "underline" }}
-          >
-            friendbot.stellar.org
-          </a>
-        </span>
+        <span>Testnet only — fund your account free at</span>
+        <a href="https://friendbot.stellar.org" target="_blank" rel="noreferrer" style={{ color: "inherit", fontWeight: 600, marginLeft: 4 }}>
+          friendbot.stellar.org
+        </a>
       </div>
     </div>
   );
 }
 
-function SpinIcon() {
+function Spinner() {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      style={{ animation: "spin 0.8s linear infinite" }}
-    >
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ animation: "spin 0.8s linear infinite" }}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="20" strokeDashoffset="8" />
     </svg>
   );

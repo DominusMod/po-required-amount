@@ -1,7 +1,0 @@
-[package]
-name = "balance_proof"
-type = "bin"
-authors = ["DominusMod"]
-compiler_version = ">=0.32.0"
-
-[dependencies]

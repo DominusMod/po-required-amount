@@ -1,13 +1,16 @@
+
 /**
  * lib_stellar/horizon.ts
  * Fetch USDC balance from Stellar Horizon (testnet)
- * USDC on Stellar testnet: GBBD47IF6LWK7P7MLAUZWD4JRMH3HMTJJLRPPVSCCQHQ6XXVKHHHFCA
+ *
+ * Testnet USDC issuer confirmed against live Horizon response on 2026-06-18:
+ * GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
  */
 
 export const HORIZON_TESTNET = "https://horizon-testnet.stellar.org";
 
 // Testnet USDC issuer (Circle's testnet USDC)
-export const USDC_ISSUER_TESTNET = "GBBD47IF6LWK7P7MLAUZWD4JRMH3HMTJJLRPPVSCCQHQ6XXVKHHHFCA";
+export const USDC_ISSUER_TESTNET = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 export const USDC_ASSET_CODE = "USDC";
 
 export interface BalanceResult {
@@ -27,17 +30,42 @@ export interface HorizonBalance {
   selling_liabilities?: string;
 }
 
+/**
+ * Converts a Stellar balance string (7 decimal places, e.g. "1250.0000000")
+ * into an exact integer number of cents (2 decimal places), as a bigint.
+ *
+ * Done via string manipulation rather than parseFloat()/Math.round() to avoid
+ * floating point rounding errors (e.g. 0.1 * 100 !== 10 exactly in JS floats).
+ */
+export function stellarBalanceStringToCents(balanceStr: string): bigint {
+  const [wholePart, fracPart = ""] = balanceStr.split(".");
+  // Stellar uses 7 decimal places; we only need the first 2 (cents).
+  // Truncate (not round) to match how on-chain balances are conventionally
+  // floored when converting to a coarser unit — avoids ever overstating
+  // the proven balance.
+  const centsFromFrac = fracPart.slice(0, 2).padEnd(2, "0");
+  const wholeCents = BigInt(wholePart) * 100n;
+  const fracCents = BigInt(centsFromFrac || "0");
+  return wholeCents + fracCents;
+}
+
 export async function fetchStellarUSDCBalance(
   publicKey: string
 ): Promise<BalanceResult> {
+  if (!isValidStellarPublicKey(publicKey)) {
+    throw new Error("Invalid Stellar public key format. Expected a G... address.");
+  }
+
   const url = `${HORIZON_TESTNET}/accounts/${publicKey}`;
-  
+
   const res = await fetch(url, {
     headers: { Accept: "application/json" },
   });
 
   if (res.status === 404) {
-    throw new Error("Account not found on Stellar testnet. Fund it at https://friendbot.stellar.org");
+    throw new Error(
+      "Account not found on Stellar testnet. Fund it at https://friendbot.stellar.org"
+    );
   }
   if (!res.ok) {
     throw new Error(`Horizon error ${res.status}: ${res.statusText}`);
@@ -62,15 +90,12 @@ export async function fetchStellarUSDCBalance(
     };
   }
 
-  // Stellar stores 7 decimal places. We convert to integer cents (2dp)
-  // e.g. "1250.0000000" → 125000n
-  const balanceFloat = parseFloat(usdcBalance.balance);
-  const balanceCents = BigInt(Math.round(balanceFloat * 100));
+  const balanceCents = stellarBalanceStringToCents(usdcBalance.balance);
 
   return {
     balance: usdcBalance.balance,
     balanceCents,
-    balanceUnits: balanceFloat,
+    balanceUnits: parseFloat(usdcBalance.balance),
     assetCode: USDC_ASSET_CODE,
     issuer: USDC_ISSUER_TESTNET,
   };

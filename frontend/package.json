@@ -9,16 +9,17 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@aztec/bb.js": "^0.55.0",
+    "@noir-lang/backend_barretenberg": "^0.32.0",
+    "@noir-lang/noir_js": "^0.32.0",
+    "@stellar/stellar-sdk": "^12.2.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.395.0",
     "next": "14.2.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "@stellar/stellar-sdk": "^12.2.0",
-    "stellar-sdk": "^12.2.0",
-    "@aztec/bb.js": "^0.55.0",
-    "@noir-lang/noir_js": "^0.32.0",
-    "@noir-lang/backend_barretenberg": "^0.32.0",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.395.0"
+    "snarkjs": "^0.7.6",
+    "stellar-sdk": "^12.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.2",

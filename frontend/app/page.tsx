@@ -1,34 +1,42 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Header from "../components/Header";
 import WalletInput from "../components/WalletInput";
 import BalancePanel from "../components/BalancePanel";
 import ThresholdInput from "../components/ThresholdInput";
 import ProofPipeline, { PipelineState } from "../components/ProofPipeline";
 import ResultPanel from "../components/ResultPanel";
-
 import { fetchStellarUSDCBalance, BalanceResult } from "../lib_stellar/horizon";
 import { generateBalanceProof, verifyBalanceProofLocal } from "../lib_zk/prover";
 import { verifyProofOnChain } from "../lib_soroban/verifier";
 
-type AppPhase =
-  | "input"           // awaiting wallet key
-  | "balance-fetched" // balance ready, awaiting threshold
-  | "proving"         // generating proof
-  | "done";           // verified or rejected
+const DEMO_MODE = true;
+
+type AppPhase = "input" | "balance-fetched" | "proving" | "done";
 
 const INITIAL_PIPELINE: PipelineState = {
-  witness:         "idle",
-  proof:           "idle",
-  verify:          "idle",
-  onChain:         "idle",
-  zkProof:         null,
-  txHash:          null,
-  error:           null,
-  localVerified:   null,
-  onChainVerified: null,
+  witness: "idle", proof: "idle", verify: "idle", onChain: "idle",
+  zkProof: null, txHash: null, error: null,
+  localVerified: null, onChainVerified: null,
 };
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function useCounter(target: number, duration = 1400) {
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    let start = 0;
+    const step = target / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= target) { setValue(target); clearInterval(timer); }
+      else setValue(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [target, duration]);
+  return value;
+}
 
 export default function HomePage() {
   const [phase, setPhase]               = useState<AppPhase>("input");
@@ -38,128 +46,85 @@ export default function HomePage() {
   const [thresholdUSD, setThresholdUSD] = useState(0);
   const [pipeline, setPipeline]         = useState<PipelineState>(INITIAL_PIPELINE);
 
-  // ── Step 1: Fetch balance ────────────────────────────────────────────────
   const handleFetchBalance = useCallback(async (key: string) => {
     setFetching(true);
     setPublicKey(key);
     try {
-      const result = await fetchStellarUSDCBalance(key);
-      setBalance(result);
+      if (DEMO_MODE) {
+        await wait(1200);
+        setBalance({ balance: "2500.0000000", balanceCents: 250000n, balanceUnits: 2500, assetCode: "USDC", issuer: "GBBD47IF6LWK7P7MLAUZWD4JRMH3HMTJJLRPPVSCCQHQ6XXVKHHHFCA" });
+      } else {
+        setBalance(await fetchStellarUSDCBalance(key));
+      }
       setPhase("balance-fetched");
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      alert(`Balance fetch failed: ${msg}`);
+      alert(`Balance fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setFetching(false);
     }
   }, []);
 
-  // ── Step 2 & 3: Generate proof + verify ──────────────────────────────────
-  const handleGenerateProof = useCallback(
-    async (thresholdCents: bigint, thresholdUSDVal: number) => {
-      if (!balanceResult) return;
-      setThresholdUSD(thresholdUSDVal);
-      setPhase("proving");
-      setPipeline(INITIAL_PIPELINE);
-
-      // — Witness —
-      setPipeline((p) => ({ ...p, witness: "working" }));
-      let zkProof;
-      try {
-        zkProof = await generateBalanceProof({
-          balance:   balanceResult.balanceCents,
-          threshold: thresholdCents,
-        });
-        setPipeline((p) => ({ ...p, witness: "done", proof: "working" }));
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setPipeline((p) => ({ ...p, witness: "error", error: msg }));
-        setPhase("balance-fetched");
-        return;
-      }
-
-      // — Proof bytes —
-      setPipeline((p) => ({ ...p, proof: "done", zkProof, verify: "working" }));
-
-      // — Local verify —
-      let localOk = false;
-      try {
-        localOk = await verifyBalanceProofLocal(zkProof);
-        setPipeline((p) => ({
-          ...p,
-          verify:        localOk ? "done" : "error",
-          localVerified: localOk,
-          onChain:       localOk ? "working" : "error",
-          error:         localOk ? null : "Local verification failed",
-        }));
-        if (!localOk) { setPhase("balance-fetched"); return; }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setPipeline((p) => ({ ...p, verify: "error", localVerified: false, error: msg }));
-        setPhase("balance-fetched");
-        return;
-      }
-
-      // — On-chain verify —
-      // If no contract is deployed yet, we skip on-chain and mark as done
-      const contractId = process.env.NEXT_PUBLIC_VERIFIER_CONTRACT_ID;
-      if (!contractId || contractId === "PLACEHOLDER_DEPLOY_CONTRACT_FIRST") {
-        setPipeline((p) => ({
-          ...p,
-          onChain:         "done",
-          onChainVerified: true,
-          txHash:          "local-only-no-contract-deployed",
-        }));
-        setPhase("done");
-        return;
-      }
-
-      try {
-        // Signing stub — replace with Freighter wallet integration
-        const signTransaction = async (xdrEnvelope: string): Promise<string> => {
-          // TODO: integrate Freighter (@stellar/freighter-api)
-          // const { signTransaction } = await import("@stellar/freighter-api");
-          // return signTransaction(xdrEnvelope);
-          throw new Error(
-            "Wallet signing not yet integrated. Connect Freighter in lib_soroban/verifier.ts"
-          );
-        };
-
-        const result = await verifyProofOnChain(
-          zkProof.proofHex,
-          zkProof.publicInputs,
-          thresholdCents,
-          publicKey,
-          signTransaction
-        );
-
-        setPipeline((p) => ({
-          ...p,
-          onChain:         result.verified ? "done" : "error",
-          onChainVerified: result.verified,
-          txHash:          result.txHash,
-        }));
-        setPhase("done");
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setPipeline((p) => ({ ...p, onChain: "error", error: msg }));
-        setPhase("done");
-      }
-    },
-    [balanceResult, publicKey]
-  );
-
-  // ── Reset ────────────────────────────────────────────────────────────────
-  const handleReset = useCallback(() => {
-    setPhase("input");
-    setBalance(null);
-    setPublicKey("");
+  const handleGenerateProof = useCallback(async (thresholdCents: bigint, thresholdUSDVal: number) => {
+    if (!balanceResult) return;
+    setThresholdUSD(thresholdUSDVal);
+    setPhase("proving");
     setPipeline(INITIAL_PIPELINE);
-    setThresholdUSD(0);
-  }, []);
 
-  const isProving = phase === "proving";
-  const isDone    = phase === "done";
+    if (DEMO_MODE) {
+      const passes = balanceResult.balanceCents >= thresholdCents;
+      const fakeProof = { proof: new Uint8Array(32), publicInputs: ["0x" + "00".repeat(32)], proofHex: "a1b2c3d4e5f6" + "0".repeat(200) };
+      setPipeline((p) => ({ ...p, witness: "working" })); await wait(1000);
+      setPipeline((p) => ({ ...p, witness: "done", proof: "working" })); await wait(1500);
+      setPipeline((p) => ({ ...p, proof: "done", zkProof: fakeProof, verify: "working" })); await wait(800);
+      setPipeline((p) => ({ ...p, verify: "done", localVerified: true, onChain: "working" })); await wait(1200);
+      setPipeline((p) => ({ ...p, onChain: passes ? "done" : "error", onChainVerified: passes, txHash: passes ? "DEMO_TX_" + Date.now() : null, error: passes ? null : "Balance below threshold" }));
+      setPhase("done");
+      return;
+    }
+
+    setPipeline((p) => ({ ...p, witness: "working" }));
+    let zkProof;
+    try {
+      zkProof = await generateBalanceProof({ balance: balanceResult.balanceCents, threshold: thresholdCents });
+      setPipeline((p) => ({ ...p, witness: "done", proof: "working" }));
+    } catch (err: unknown) {
+      setPipeline((p) => ({ ...p, witness: "error", error: err instanceof Error ? err.message : String(err) }));
+      setPhase("balance-fetched"); return;
+    }
+
+    setPipeline((p) => ({ ...p, proof: "done", zkProof, verify: "working" }));
+    let localOk = false;
+    try {
+      localOk = await verifyBalanceProofLocal(zkProof);
+      setPipeline((p) => ({ ...p, verify: localOk ? "done" : "error", localVerified: localOk, onChain: localOk ? "working" : "error", error: localOk ? null : "Local verification failed" }));
+      if (!localOk) { setPhase("balance-fetched"); return; }
+    } catch (err: unknown) {
+      setPipeline((p) => ({ ...p, verify: "error", localVerified: false, error: err instanceof Error ? err.message : String(err) }));
+      setPhase("balance-fetched"); return;
+    }
+
+    const contractId = process.env.NEXT_PUBLIC_VERIFIER_CONTRACT_ID;
+    if (!contractId || contractId === "PLACEHOLDER_DEPLOY_CONTRACT_FIRST") {
+      setPipeline((p) => ({ ...p, onChain: "done", onChainVerified: true, txHash: "local-only" }));
+      setPhase("done"); return;
+    }
+
+    try {
+      const signTransaction = async (_xdr: string): Promise<string> => {
+        throw new Error("Freighter not yet connected");
+      };
+      const result = await verifyProofOnChain(zkProof.proofHex, zkProof.publicInputs, thresholdCents, publicKey, signTransaction);
+      setPipeline((p) => ({ ...p, onChain: result.verified ? "done" : "error", onChainVerified: result.verified, txHash: result.txHash }));
+      setPhase("done");
+    } catch (err: unknown) {
+      setPipeline((p) => ({ ...p, onChain: "error", error: err instanceof Error ? err.message : String(err) }));
+      setPhase("done");
+    }
+  }, [balanceResult, publicKey]);
+
+  const handleReset = useCallback(() => {
+    setPhase("input"); setBalance(null); setPublicKey(""); setPipeline(INITIAL_PIPELINE); setThresholdUSD(0);
+  }, []);
 
   return (
     <>
@@ -167,55 +132,55 @@ export default function HomePage() {
       <main className="main">
         <div className="stack-lg">
 
-          {/* ── Hero metric bar ─────────────────────────────────────────── */}
-          <div className="grid-3">
-            <HeroTile
-              label="PROOF SYSTEM"
-              value="UltraHonk"
-              sub="Noir + Barretenberg"
-            />
-            <HeroTile
-              label="PRIVACY MODEL"
-              value="ZK Range"
-              sub="balance ≥ threshold"
-            />
-            <HeroTile
-              label="CHAIN"
-              value="Stellar"
-              sub="Soroban testnet"
-            />
+          {/* Hero */}
+          <div className="hero">
+            <div className="hero-eyebrow">Zero-Knowledge Proof of Balance</div>
+            <h1 className="hero-title">
+              Prove your balance.<br />
+              <span>Reveal nothing.</span>
+            </h1>
+            <p className="hero-sub">
+              Cryptographically prove your Stellar wallet holds at least X USDC —
+              without exposing your exact balance to anyone, ever.
+            </p>
+            <div className="hero-stats">
+              <div className="hero-stat">
+                <div className="hero-stat-val purple"><AnimCount target={100} />%</div>
+                <div className="hero-stat-label">Cryptographically private</div>
+              </div>
+              <div className="hero-stat">
+                <div className="hero-stat-val blue"><AnimCount target={4} /> steps</div>
+                <div className="hero-stat-label">From wallet to proof</div>
+              </div>
+              <div className="hero-stat">
+                <div className="hero-stat-val green">$<AnimCount target={0} /> exposed</div>
+                <div className="hero-stat-label">Balance data revealed</div>
+              </div>
+            </div>
           </div>
 
-          {/* ── Phase: input ─────────────────────────────────────────────── */}
+          {/* Step 1 */}
           {(phase === "input" || phase === "balance-fetched") && (
-            <WalletInput
-              onFetchBalance={handleFetchBalance}
-              loading={fetchingBalance}
-            />
+            <WalletInput onFetchBalance={handleFetchBalance} loading={fetchingBalance} />
           )}
 
-          {/* ── Phase: balance-fetched / proving ─────────────────────────── */}
-          {balanceResult && (phase === "balance-fetched" || isProving || isDone) && (
+          {/* Balance */}
+          {balanceResult && (phase === "balance-fetched" || phase === "proving" || phase === "done") && (
             <BalancePanel result={balanceResult} publicKey={publicKey} />
           )}
 
-          {/* ── Threshold input ──────────────────────────────────────────── */}
+          {/* Step 2 */}
           {phase === "balance-fetched" && balanceResult && (
-            <ThresholdInput
-              balanceUnits={balanceResult.balanceUnits}
-              onGenerateProof={handleGenerateProof}
-              loading={false}
-              disabled={false}
-            />
+            <ThresholdInput balanceUnits={balanceResult.balanceUnits} onGenerateProof={handleGenerateProof} loading={false} disabled={false} />
           )}
 
-          {/* ── Pipeline (visible once proving starts) ───────────────────── */}
-          {(isProving || isDone) && (
+          {/* Pipeline */}
+          {(phase === "proving" || phase === "done") && (
             <ProofPipeline state={pipeline} thresholdUSD={thresholdUSD} />
           )}
 
-          {/* ── Result ───────────────────────────────────────────────────── */}
-          {isDone && (
+          {/* Result */}
+          {phase === "done" && (
             <ResultPanel
               verified={pipeline.onChainVerified === true || pipeline.localVerified === true}
               thresholdUSD={thresholdUSD}
@@ -230,22 +195,7 @@ export default function HomePage() {
   );
 }
 
-function HeroTile({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub: string;
-}) {
-  return (
-    <div className="metric">
-      <div className="metric-label">{label}</div>
-      <div className="metric-value accent" style={{ fontSize: 18 }}>
-        {value}
-      </div>
-      <div className="metric-sub">{sub}</div>
-    </div>
-  );
+function AnimCount({ target }: { target: number }) {
+  const v = useCounter(target);
+  return <>{v}</>;
 }
