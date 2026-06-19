@@ -52,7 +52,7 @@ export default function HomePage() {
     try {
       if (DEMO_MODE) {
         await wait(1200);
-        setBalance({ balance: "2500.0000000", balanceCents: 250000n, balanceUnits: 2500, assetCode: "USDC", issuer: "GBBD47IF6LWK7P7MLAUZWD4JRMH3HMTJJLRPPVSCCQHQ6XXVKHHHFCA" });
+        setBalance({ balance: "2500.0000000", balanceCents: 250000n, balanceUnits: 2500, assetCode: "USDC", issuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5" });
       } else {
         setBalance(await fetchStellarUSDCBalance(key));
       }
