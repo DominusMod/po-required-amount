@@ -12,6 +12,7 @@
     "@aztec/bb.js": "^0.55.0",
     "@noir-lang/backend_barretenberg": "^0.32.0",
     "@noir-lang/noir_js": "^0.32.0",
+    "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^12.2.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.395.0",
